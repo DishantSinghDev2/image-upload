@@ -30,7 +30,7 @@ const sections = [
   {
     id: "limits",
     title: "Rate Limits",
-    content: "Rate limits are based on your plan - Free: 10 req/min, User: 30 req/min, Pro: 100 req/min.",
+    content: "Rate limits are based on your plan on RapidAPI.",
   },
 ]
 
@@ -143,7 +143,7 @@ export default function DocsPage() {
             <div className="p-6 bg-surface border border-border rounded-lg">
               <h3 className="font-semibold mb-2">Base URL</h3>
               <p className="text-sm text-secondary">
-                <code className="bg-background px-2 py-1 rounded text-primary">https://i.api.dishis.tech</code>
+                <code className="bg-background px-2 py-1 rounded text-primary">https://upload-images-hosting-get-url.p.rapidapi.com</code>
               </p>
             </div>
 
@@ -266,30 +266,7 @@ export default function DocsPage() {
                   {section.id === "limits" && (
                     <div className="bg-surface border border-border rounded-lg p-6">
                       <div className="grid md:grid-cols-3 gap-6">
-                        <div>
-                          <h4 className="font-semibold mb-3">Free Plan</h4>
-                          <ul className="text-sm space-y-2">
-                            <li>5 MB per file</li>
-                            <li>5 files bulk</li>
-                            <li>10 req/min</li>
-                          </ul>
-                        </div>
-                        <div>
-                          <h4 className="font-semibold mb-3">Logged In</h4>
-                          <ul className="text-sm space-y-2">
-                            <li>15 MB per file</li>
-                            <li>10 files bulk</li>
-                            <li>30 req/min</li>
-                          </ul>
-                        </div>
-                        <div>
-                          <h4 className="font-semibold mb-3">Pro Plan</h4>
-                          <ul className="text-sm space-y-2">
-                            <li>35 MB per file</li>
-                            <li>50 files bulk</li>
-                            <li>100 req/min</li>
-                          </ul>
-                        </div>
+                        
                       </div>
                     </div>
                   )}
