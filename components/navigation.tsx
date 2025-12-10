@@ -50,7 +50,7 @@ export function Navigation() {
               </div>
             ) : (
               <button
-                onClick={() => signIn("whatsyourinfo")}
+                onClick={() => signIn("wyi")}
                 className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
               >
                 <LogIn className="w-4 h-4" />
@@ -93,7 +93,7 @@ export function Navigation() {
               </button>
             ) : (
               <button
-                onClick={() => signIn("whatsyourinfo")}
+                onClick={() => signIn("wyi")}
                 className="w-full text-left px-4 py-2 hover:bg-surface rounded-lg transition-colors text-primary"
               >
                 Sign In with WhatsYour.Info

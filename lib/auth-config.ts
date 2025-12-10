@@ -67,7 +67,7 @@ const providers =
   process.env.WHATSYOURINFO_CLIENT_ID && process.env.WHATSYOURINFO_CLIENT_SECRET
     ? [
         {
-          id: "whatsyourinfo",
+          id: "wyi",
           name: "WhatsYour.Info",
           type: "oauth",
           authorization: {

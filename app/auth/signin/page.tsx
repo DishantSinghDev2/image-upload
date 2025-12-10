@@ -29,7 +29,7 @@ export default function SignInPage() {
         {/* Sign In Form */}
         <div className="space-y-4">
           <button
-            onClick={() => signIn("whatsyourinfo", { callbackUrl: "/upload" })}
+            onClick={() => signIn("wyi", { callbackUrl: "/upload" })}
             className="w-full py-3 bg-gradient-to-r from-primary to-accent text-primary-foreground rounded-lg hover:brightness-110 transition-all font-semibold"
           >
             Sign In with WhatsYour.Info
