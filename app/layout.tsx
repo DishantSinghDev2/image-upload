@@ -2,8 +2,8 @@ import type React from "react"
 import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
-import { SessionProvider } from "next-auth/react"
 import "./globals.css"
+import AuthProvider from "./AuthProvider"
 
 const _geist = Geist({ subsets: ["latin"] })
 const _geistMono = Geist_Mono({ subsets: ["latin"] })
@@ -12,7 +12,6 @@ export const metadata: Metadata = {
   title: "ImageHost - Fast Image Hosting & API",
   description:
     "Ultra-fast image hosting with secure API, bulk uploads, and pro features. Upload images up to 35MB with our production-ready platform.",
-  generator: "v0.app",
   icons: {
     icon: [
       {
@@ -40,10 +39,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`font-sans antialiased`}>
-        <SessionProvider>
+        <AuthProvider>
           {children}
           <Analytics />
-        </SessionProvider>
+        </AuthProvider>
       </body>
     </html>
   )

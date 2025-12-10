@@ -23,6 +23,14 @@ function checkRateLimit(key: string, requestsPerMinute: number): boolean {
   return false
 }
 
+function getFutureUnixTimestampInDays(daysToAdd: number) {
+  const now = Date.now(); // Current timestamp in milliseconds
+  const millisecondsToAdd = daysToAdd * 24 * 60 * 60 * 1000;
+  const futureTimestampMilliseconds = now + millisecondsToAdd;
+  return Math.floor(futureTimestampMilliseconds / 1000);
+}
+
+
 export async function POST(request: Request) {
   try {
     const session = await getServerSession(authConfig)
@@ -57,31 +65,36 @@ export async function POST(request: Request) {
 
     // Generate unique ID
     const fileId = crypto.randomBytes(6).toString("hex")
-    const buffer = await file.arrayBuffer()
+    const newFormData = new FormData()
+    newFormData.set('image', file)
+    newFormData.set('expiration', String(getFutureUnixTimestampInDays(Number(expirationDays))))
 
     const expirationDate = expirationDays
       ? new Date(Date.now() + expirationDays * 24 * 60 * 60 * 1000).toISOString()
       : "never"
 
     // Here you would send to i.api.dishis.tech
-    // For now, we'll prepare the data structure
-    const uploadData = {
-      id: fileId,
-      title: file.name.split(".")[0],
-      url: `https://i.dishis.tech/i/${fileId}`,
-      display_url: `https://i.api.dishis.tech/i/${fileId}`,
-      size: file.size.toString(),
-      timestamp: Date.now(),
-      expiration: expirationDate,
-      success: true,
-    }
+
+    const res = await fetch('https://i.api.dishis.tech', {
+      method: 'POST',
+      body: newFormData,
+      headers: {
+        'x-api-key': process.env.IMAGE_HOST_API_KEY
+      }
+    })
+
+    const resData = await res.json()
+    if (!res.ok || resData.success)
+      return Response.json(resData || { success: false }, { status: 400 })
+
+    const uploadData = resData.data
 
     return Response.json({
       success: true,
       data: uploadData,
     })
   } catch (error) {
-    console.error("[v0] Upload error:", error)
+    console.error(" Upload error:", error)
     return Response.json({ success: false, error: "Upload failed" }, { status: 500 })
   }
 }

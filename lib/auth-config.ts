@@ -55,7 +55,7 @@ async function refreshAccessToken(token: JWT) {
       refreshToken: refreshedTokens.refresh_token ?? token.refreshToken,
     }
   } catch (error) {
-    console.error("[v0] Error refreshing access token", error)
+    console.error("Error refreshing access token", error)
     return {
       ...token,
       error: "RefreshAccessTokenError",
