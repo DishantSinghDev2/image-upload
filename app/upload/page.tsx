@@ -6,6 +6,7 @@ import { Navigation } from "@/components/navigation"
 import { UploadDropzone } from "@/components/upload-dropzone"
 import { UploadHistoryWidget } from "@/components/upload-history-widget"
 import { getRateLimitConfig } from "@/lib/rate-limit"
+import Link from "next/link"
 
 export default function UploadPage() {
   const { data: session } = useSession()
@@ -57,9 +58,11 @@ export default function UploadPage() {
                 </div>
 
                 {!isUserPro && (
+                  <Link href={'https://whatsyour.info/pricing'}>
                   <button className="w-full py-2 bg-gradient-to-r from-primary to-accent text-primary-foreground rounded-lg hover:brightness-110 transition-all font-semibold">
                     Upgrade to Pro
                   </button>
+                  </Link>
                 )}
               </div>
 

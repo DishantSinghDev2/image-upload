@@ -4,6 +4,12 @@ import { getRateLimitConfig } from "@/lib/rate-limit"
 
 export const maxDuration = 60 // Allow longer timeout for bulk forwarding
 
+// Helper to convert days to Unix Timestamp (Seconds)
+function getFutureUnixTimestampInDays(days: number) {
+  const ms = days * 24 * 60 * 60 * 1000
+  return Math.floor((Date.now() + ms) / 1000)
+}
+
 export async function POST(request: Request) {
   try {
     const session = await getServerSession(authConfig)
@@ -15,6 +21,9 @@ export async function POST(request: Request) {
     
     const formData = await request.formData()
     const files = formData.getAll("files") as File[]
+    const expirationDays = formData.get("expiration") 
+      ? Number(formData.get("expiration")) 
+      : null
 
     if (!files || files.length === 0) {
       return Response.json({ success: false, error: "No files provided" }, { status: 400 })
@@ -31,8 +40,15 @@ export async function POST(request: Request) {
     const upstreamForm = new FormData()
     files.forEach((file) => upstreamForm.append("files[]", file))
 
-    // Optional: Pass expiration if needed/supported by bulk endpoint
-    // if (formData.get("expiration")) upstreamForm.set("expiration", formData.get("expiration") as string)
+    // Handle Expiration Logic
+    if (expirationDays) {
+      if (!isUserPro) {
+         return Response.json({ error: "Pro plan required for custom expiration" }, { status: 403 })
+      }
+      // Convert days to Unix Timestamp before sending to Worker
+      const timestamp = getFutureUnixTimestampInDays(expirationDays)
+      upstreamForm.set("expiration", String(timestamp))
+    }
 
     const res = await fetch("https://i.api.dishis.tech/bulk-upload", {
       method: "POST",

@@ -7,19 +7,15 @@ import { motion, AnimatePresence } from "framer-motion"
 import { Upload, X, Check, Copy, AlertCircle, Loader2, ExternalLink } from "lucide-react"
 import { getRateLimitConfig } from "@/lib/rate-limit"
 import { addToHistory } from "@/lib/upload-history"
-import { ExpirationSelector } from "./expiration-selector"
+import { ExpirationSelector } from "./expiration-selector" // Import the new component
 
-// --- Types ---
-
+// ... (Types remain the same as previous) ...
 interface UploadItem {
   id: string
   url?: string
   error?: string
   done: boolean
-  // We use this to map back to local previews if needed, 
-  // though the server response is usually the source of truth for status
 }
-
 interface BatchStatus {
   success: boolean
   batchId: string
@@ -29,15 +25,12 @@ interface BatchStatus {
   percent: number
   items: UploadItem[]
 }
-
 interface LocalFile {
   id: string
   file: File
   preview: string
   size: number
 }
-
-// --- Component ---
 
 export function UploadDropzone() {
   const { data: session } = useSession()
@@ -48,18 +41,17 @@ export function UploadDropzone() {
   // State
   const [isDragging, setIsDragging] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<LocalFile[]>([])
+  
+  // Stores expiration in DAYS. Null means "Never"
   const [selectedExpiration, setSelectedExpiration] = useState<number | null>(null)
   
-  // Upload State
   const [isUploading, setIsUploading] = useState(false)
   const [batchStatus, setBatchStatus] = useState<BatchStatus | null>(null)
   const [globalError, setGlobalError] = useState<string>("")
   
-  // Refs
   const pollingRef = useRef<NodeJS.Timeout | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Cleanup
   useEffect(() => {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current)
@@ -67,7 +59,7 @@ export function UploadDropzone() {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // --- Handlers ---
+  // ... (Drag and Drop Handlers handleDragOver, handleDrop, addFiles remain the same) ...
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -82,28 +74,20 @@ export function UploadDropzone() {
     (files: FileList) => {
       setGlobalError("")
       if (batchStatus) {
-         // Reset if user is adding files after a previous batch
          setBatchStatus(null) 
          setSelectedFiles([])
       }
-
       const fileArray = Array.from(files)
-      
-      // Limit Check
       if (fileArray.length + selectedFiles.length > config.maxBulkUpload) {
         setGlobalError(`You can only upload up to ${config.maxBulkUpload} files at once.`)
         return
       }
-
       const newFiles: LocalFile[] = []
-
       for (const file of fileArray) {
-        // Size Check
         if (file.size > config.maxFileSize) {
           setGlobalError(`File "${file.name}" exceeds the ${config.maxFileSize / 1024 / 1024}MB limit.`)
           continue
         }
-
         newFiles.push({
           id: `${Date.now()}-${Math.random()}`,
           file,
@@ -111,7 +95,6 @@ export function UploadDropzone() {
           size: file.size,
         })
       }
-
       setSelectedFiles((prev) => [...prev, ...newFiles])
     },
     [selectedFiles, config.maxBulkUpload, config.maxFileSize, batchStatus],
@@ -133,6 +116,10 @@ export function UploadDropzone() {
       return prev.filter((f) => f.id !== id)
     })
   }
+  
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text)
+  }
 
   // --- Upload Logic ---
 
@@ -149,25 +136,22 @@ export function UploadDropzone() {
       formData.append("files", f.file)
     })
 
-    // Append Expiration
+    // Append Expiration (Only if Pro and value is set)
     if (isUserPro && selectedExpiration) {
       formData.append("expiration", selectedExpiration.toString())
     }
 
     try {
-      // 1. Initiate
       const res = await fetch("/api/upload/bulk", {
         method: "POST",
         body: formData,
       })
-      
       const data = await res.json()
 
       if (!data.success || !data.batchId) {
         throw new Error(data.error || "Failed to initiate upload")
       }
 
-      // 2. Initial Status State
       setBatchStatus({
         success: true,
         batchId: data.batchId,
@@ -175,10 +159,9 @@ export function UploadDropzone() {
         completed: 0,
         failed: 0,
         percent: 0,
-        items: [] // The polling will populate this
+        items: [] 
       })
 
-      // 3. Start Polling
       const batchId = data.batchId
       pollingRef.current = setInterval(async () => {
         try {
@@ -187,17 +170,14 @@ export function UploadDropzone() {
           
           setBatchStatus(pollData)
 
-          // 4. Handle Completion
           if (pollData.percent >= 100) {
             if (pollingRef.current) clearInterval(pollingRef.current)
             setIsUploading(false)
             
-            // Save successful uploads to history
+            // Add to History
             pollData.items.forEach(item => {
               if (item.done && item.url && !item.error) {
-                // Find original file size for history
-                const original = selectedFiles.find((_, idx) => idx.toString() === item.id) // Assuming index mapping or similar ID strategy
-                // Fallback size if matching fails
+                const original = selectedFiles.find((_, idx) => idx.toString() === item.id) 
                 const size = original ? original.size : 0
                 
                 addToHistory({
@@ -206,8 +186,11 @@ export function UploadDropzone() {
                   url: item.url,
                   size: size,
                   timestamp: Date.now(),
-                  expiration: selectedExpiration || undefined,
-                  deleteUrl: "" // Bulk API might need to return this if needed
+                  // Save calculated expiration timestamp for history reference
+                  expiration: selectedExpiration 
+                    ? Date.now() + (selectedExpiration * 24 * 60 * 60 * 1000) 
+                    : undefined,
+                  deleteUrl: "" 
                 })
               }
             })
@@ -224,23 +207,18 @@ export function UploadDropzone() {
     }
   }
 
-  // --- Render Helpers ---
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
-    // You could add a toast notification here
-  }
+  // --- Render ---
 
   return (
     <div className="w-full space-y-8">
       
-      {/* 1. Drop Zone (Hidden if actively uploading/showing results) */}
       {!batchStatus && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           className="space-y-6"
         >
+          {/* Drop Area */}
           <div
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -259,7 +237,6 @@ export function UploadDropzone() {
               className="hidden"
               accept="image/*"
             />
-
             <div className="flex flex-col items-center gap-4">
               <div className={`p-4 rounded-full transition-colors ${isDragging ? "bg-primary/10" : "bg-surface border border-border"}`}>
                 <Upload className={`w-8 h-8 ${isDragging ? "text-primary" : "text-secondary"}`} />
@@ -275,22 +252,21 @@ export function UploadDropzone() {
             </div>
           </div>
 
-          {/* Selected Files Preview Grid */}
           <AnimatePresence>
             {selectedFiles.length > 0 && (
               <motion.div
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: "auto", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                className="space-y-4"
+                className="space-y-6"
               >
+                {/* File Grid */}
                 <div className="flex items-center justify-between px-1">
                   <h4 className="font-semibold text-sm text-secondary">Selected ({selectedFiles.length})</h4>
                   <button onClick={() => setSelectedFiles([])} className="text-xs text-red-400 hover:text-red-300">
                     Clear All
                   </button>
                 </div>
-
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
                   {selectedFiles.map((file) => (
                     <motion.div
@@ -312,19 +288,21 @@ export function UploadDropzone() {
                   ))}
                 </div>
 
-                {/* Expiration & Action */}
+                {/* Settings Panel */}
                 <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
+                  {/* The New Expiration Selector */}
                   <ExpirationSelector 
                     isProUser={isUserPro} 
-                    onSelect={setSelectedExpiration} 
                     selectedDays={selectedExpiration} 
+                    onSelect={setSelectedExpiration} 
                   />
                   
                   <button
                     onClick={startUpload}
+                    disabled={isUploading}
                     className="w-full py-3 bg-gradient-to-r from-primary to-accent text-primary-foreground font-semibold rounded-lg hover:brightness-110 transition-all active:scale-[0.99]"
                   >
-                    Upload {selectedFiles.length} Images
+                    {isUploading ? 'Uploading...' :`Upload ${selectedFiles.length} Images`}
                   </button>
                 </div>
               </motion.div>
@@ -340,14 +318,9 @@ export function UploadDropzone() {
         </motion.div>
       )}
 
-      {/* 2. Progress & Results View */}
+      {/* Progress & Results View (Existing Code) */}
       {batchStatus && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="space-y-8"
-        >
-          {/* Progress Header */}
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
           <div className="bg-surface border border-border rounded-xl p-6 space-y-4">
              <div className="flex justify-between items-end">
                <div>
@@ -360,7 +333,6 @@ export function UploadDropzone() {
                </div>
                <span className="text-2xl font-bold text-primary">{Math.round(batchStatus.percent)}%</span>
              </div>
-             
              <div className="h-2 bg-secondary/20 rounded-full overflow-hidden">
                <motion.div 
                  className="h-full bg-gradient-to-r from-primary to-accent"
@@ -371,14 +343,7 @@ export function UploadDropzone() {
              </div>
           </div>
 
-          {/* Results Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 
-               We map the SERVER items here. 
-               If the upload is still starting (percent < 100) and items array is partial,
-               you might want to merge with local previews, but for simplicity/accuracy, 
-               we rely on what the server reports back in the polling object.
-            */}
             {batchStatus.items.map((item, idx) => (
               <motion.div
                 key={item.id || idx}
@@ -391,20 +356,15 @@ export function UploadDropzone() {
                   ${!item.done ? "border-border bg-surface" : ""}
                 `}
               >
-                {/* Thumbnail */}
                 <div className="relative w-16 h-16 flex-shrink-0 rounded-md overflow-hidden bg-background">
                   {item.url ? (
                      <img src={item.url} alt="Uploaded" className="w-full h-full object-cover" />
                   ) : (
-                     // Fallback to local preview if waiting (optional, requires index matching)
-                     // or just a loader icon
                      <div className="w-full h-full flex items-center justify-center text-secondary">
                        {item.error ? <AlertCircle className="w-6 h-6 text-red-500" /> : <Loader2 className="w-6 h-6 animate-spin" />}
                      </div>
                   )}
                 </div>
-
-                {/* Details */}
                 <div className="flex-1 min-w-0">
                   {item.error ? (
                     <p className="text-sm text-red-500 font-medium truncate">{item.error}</p>
@@ -425,14 +385,11 @@ export function UploadDropzone() {
                     <p className="text-sm text-secondary animate-pulse">Processing...</p>
                   )}
                 </div>
-
-                {/* Actions */}
                 {item.url && (
                   <div className="flex flex-col gap-2">
                     <button
                       onClick={() => copyToClipboard(item.url!)}
                       className="p-2 hover:bg-background rounded-md text-secondary hover:text-primary transition-colors"
-                      title="Copy URL"
                     >
                       <Copy className="w-4 h-4" />
                     </button>
@@ -441,7 +398,6 @@ export function UploadDropzone() {
                       target="_blank"
                       rel="noreferrer"
                       className="p-2 hover:bg-background rounded-md text-secondary hover:text-primary transition-colors"
-                      title="Open Link"
                     >
                       <ExternalLink className="w-4 h-4" />
                     </a>
@@ -451,13 +407,8 @@ export function UploadDropzone() {
             ))}
           </div>
 
-          {/* Finished State Actions */}
           {batchStatus.percent === 100 && (
-             <motion.div 
-                initial={{ opacity: 0 }} 
-                animate={{ opacity: 1 }} 
-                className="flex justify-center pt-8"
-             >
+             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-center pt-8">
                <button
                  onClick={() => {
                    setBatchStatus(null)
