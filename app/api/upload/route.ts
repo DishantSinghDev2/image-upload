@@ -80,9 +80,6 @@ export async function POST(request: Request) {
       )
     }
 
-    // fancy short id because uuid is too clingy
-    const fileId = crypto.randomBytes(6).toString("hex")
-
     const upstreamForm = new FormData()
     upstreamForm.set("image", file)
 

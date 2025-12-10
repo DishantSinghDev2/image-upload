@@ -1,40 +1,73 @@
 "use client"
 
 import type React from "react"
-
-import { useCallback, useState } from "react"
+import { useCallback, useState, useRef, useEffect } from "react"
 import { useSession } from "next-auth/react"
-import { motion } from "framer-motion"
-import { Upload, AlertCircle } from "lucide-react"
+import { motion, AnimatePresence } from "framer-motion"
+import { Upload, X, Check, Copy, AlertCircle, Loader2, ExternalLink } from "lucide-react"
 import { getRateLimitConfig } from "@/lib/rate-limit"
 import { addToHistory } from "@/lib/upload-history"
-import { uploadImageToServer } from "@/lib/upload-api"
 import { ExpirationSelector } from "./expiration-selector"
-import { ImagePreviewGallery } from "./image-preview-gallery"
 
-interface UploadDropzoneProps {
-  onUploadComplete?: (urls: string[]) => void
+// --- Types ---
+
+interface UploadItem {
+  id: string
+  url?: string
+  error?: string
+  done: boolean
+  // We use this to map back to local previews if needed, 
+  // though the server response is usually the source of truth for status
 }
 
-interface ImageFile {
+interface BatchStatus {
+  success: boolean
+  batchId: string
+  total: number
+  completed: number
+  failed: number
+  percent: number
+  items: UploadItem[]
+}
+
+interface LocalFile {
   id: string
   file: File
   preview: string
   size: number
 }
 
-export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
-  const { data: session } = useSession()
-  const [isDragging, setIsDragging] = useState(false)
-  const [isUploading, setIsUploading] = useState(false)
-  const [selectedFiles, setSelectedFiles] = useState<ImageFile[]>([])
-  const [uploadedUrls, setUploadedUrls] = useState<string[]>([])
-  const [error, setError] = useState<string>("")
-  const [selectedExpiration, setSelectedExpiration] = useState<number | null>(null)
+// --- Component ---
 
+export function UploadDropzone() {
+  const { data: session } = useSession()
   const isUserPro = (session?.user as any)?.isUserPro || false
   const isLoggedIn = !!session
   const config = getRateLimitConfig(isUserPro, isLoggedIn)
+
+  // State
+  const [isDragging, setIsDragging] = useState(false)
+  const [selectedFiles, setSelectedFiles] = useState<LocalFile[]>([])
+  const [selectedExpiration, setSelectedExpiration] = useState<number | null>(null)
+  
+  // Upload State
+  const [isUploading, setIsUploading] = useState(false)
+  const [batchStatus, setBatchStatus] = useState<BatchStatus | null>(null)
+  const [globalError, setGlobalError] = useState<string>("")
+  
+  // Refs
+  const pollingRef = useRef<NodeJS.Timeout | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Cleanup
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
+      selectedFiles.forEach(f => URL.revokeObjectURL(f.preview))
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Handlers ---
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -45,229 +78,398 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
     setIsDragging(false)
   }, [])
 
-  const addFilesToPreview = useCallback(
+  const addFiles = useCallback(
     (files: FileList) => {
-      setError("")
-      const fileArray = Array.from(files)
+      setGlobalError("")
+      if (batchStatus) {
+         // Reset if user is adding files after a previous batch
+         setBatchStatus(null) 
+         setSelectedFiles([])
+      }
 
+      const fileArray = Array.from(files)
+      
+      // Limit Check
       if (fileArray.length + selectedFiles.length > config.maxBulkUpload) {
-        setError(`Maximum ${config.maxBulkUpload} files at once`)
+        setGlobalError(`You can only upload up to ${config.maxBulkUpload} files at once.`)
         return
       }
 
-      const newFiles: ImageFile[] = fileArray.map((file) => ({
-        id: `${Date.now()}-${Math.random()}`,
-        file,
-        preview: URL.createObjectURL(file),
-        size: file.size,
-      }))
+      const newFiles: LocalFile[] = []
+
+      for (const file of fileArray) {
+        // Size Check
+        if (file.size > config.maxFileSize) {
+          setGlobalError(`File "${file.name}" exceeds the ${config.maxFileSize / 1024 / 1024}MB limit.`)
+          continue
+        }
+
+        newFiles.push({
+          id: `${Date.now()}-${Math.random()}`,
+          file,
+          preview: URL.createObjectURL(file),
+          size: file.size,
+        })
+      }
 
       setSelectedFiles((prev) => [...prev, ...newFiles])
     },
-    [selectedFiles, config.maxBulkUpload],
+    [selectedFiles, config.maxBulkUpload, config.maxFileSize, batchStatus],
   )
-
-  const removeFile = useCallback((id: string) => {
-    setSelectedFiles((prev) => {
-      const updated = prev.filter((f) => f.id !== id)
-      const fileToRemove = prev.find((f) => f.id === id)
-      if (fileToRemove) {
-        URL.revokeObjectURL(fileToRemove.preview)
-      }
-      return updated
-    })
-  }, [])
-
-  const uploadAllFiles = useCallback(async () => {
-    if (selectedFiles.length === 0) return
-
-    setIsUploading(true)
-    const urls: string[] = []
-
-    for (const imageFile of selectedFiles) {
-      if (imageFile.size > config.maxFileSize) {
-        setError(`File "${imageFile.file.name}" exceeds limit of ${config.maxFileSize / 1024 / 1024}MB`)
-        continue
-      }
-
-      try {
-        const formData = new FormData()
-        formData.append("file", imageFile.file)
-        if (isUserPro && selectedExpiration) {
-          formData.append("expiration", selectedExpiration.toString())
-        }
-
-        const response = await uploadImageToServer(formData)
-
-        if (response.success && response.data) {
-          const imageUrl = response.data.url || response.data.display_url
-          urls.push(imageUrl)
-
-          addToHistory({
-            id: response.data.id,
-            title: response.data.title,
-            url: imageUrl,
-            size: Number.parseInt(response.data.size),
-            timestamp: Date.now(),
-            expiration: selectedExpiration || undefined,
-            deleteUrl: response.data.delete_url,
-          })
-        }
-      } catch (err) {
-        console.error("[v0] Upload failed:", err)
-      }
-    }
-
-    // Clean up previews
-    selectedFiles.forEach((f) => URL.revokeObjectURL(f.preview))
-    setSelectedFiles([])
-    setUploadedUrls((prev) => [...prev, ...urls])
-    setIsUploading(false)
-
-    if (urls.length > 0) {
-      onUploadComplete?.(urls)
-    }
-  }, [selectedFiles, config.maxFileSize, isUserPro, selectedExpiration, onUploadComplete])
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
       setIsDragging(false)
-      addFilesToPreview(e.dataTransfer.files)
+      addFiles(e.dataTransfer.files)
     },
-    [addFilesToPreview],
+    [addFiles],
   )
 
-  const handleFileSelect = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files) {
-        addFilesToPreview(e.target.files)
+  const removeFile = (id: string) => {
+    setSelectedFiles((prev) => {
+      const target = prev.find(f => f.id === id)
+      if (target) URL.revokeObjectURL(target.preview)
+      return prev.filter((f) => f.id !== id)
+    })
+  }
+
+  // --- Upload Logic ---
+
+  const startUpload = async () => {
+    if (selectedFiles.length === 0) return
+
+    setIsUploading(true)
+    setGlobalError("")
+
+    const formData = new FormData()
+    
+    // Append Files
+    selectedFiles.forEach((f) => {
+      formData.append("files", f.file)
+    })
+
+    // Append Expiration
+    if (isUserPro && selectedExpiration) {
+      formData.append("expiration", selectedExpiration.toString())
+    }
+
+    try {
+      // 1. Initiate
+      const res = await fetch("/api/upload/bulk", {
+        method: "POST",
+        body: formData,
+      })
+      
+      const data = await res.json()
+
+      if (!data.success || !data.batchId) {
+        throw new Error(data.error || "Failed to initiate upload")
       }
-    },
-    [addFilesToPreview],
-  )
+
+      // 2. Initial Status State
+      setBatchStatus({
+        success: true,
+        batchId: data.batchId,
+        total: selectedFiles.length,
+        completed: 0,
+        failed: 0,
+        percent: 0,
+        items: [] // The polling will populate this
+      })
+
+      // 3. Start Polling
+      const batchId = data.batchId
+      pollingRef.current = setInterval(async () => {
+        try {
+          const pollRes = await fetch(`/api/upload/bulk/${batchId}`)
+          const pollData: BatchStatus = await pollRes.json()
+          
+          setBatchStatus(pollData)
+
+          // 4. Handle Completion
+          if (pollData.percent >= 100) {
+            if (pollingRef.current) clearInterval(pollingRef.current)
+            setIsUploading(false)
+            
+            // Save successful uploads to history
+            pollData.items.forEach(item => {
+              if (item.done && item.url && !item.error) {
+                // Find original file size for history
+                const original = selectedFiles.find((_, idx) => idx.toString() === item.id) // Assuming index mapping or similar ID strategy
+                // Fallback size if matching fails
+                const size = original ? original.size : 0
+                
+                addToHistory({
+                  id: item.id,
+                  title: `Upload ${new Date().toLocaleTimeString()}`,
+                  url: item.url,
+                  size: size,
+                  timestamp: Date.now(),
+                  expiration: selectedExpiration || undefined,
+                  deleteUrl: "" // Bulk API might need to return this if needed
+                })
+              }
+            })
+          }
+        } catch (err) {
+          console.error("Polling error", err)
+        }
+      }, 1000)
+
+    } catch (err: any) {
+      console.error(err)
+      setGlobalError(err.message || "Upload failed")
+      setIsUploading(false)
+    }
+  }
+
+  // --- Render Helpers ---
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text)
+    // You could add a toast notification here
+  }
 
   return (
-    <div className="w-full space-y-6">
-      <motion.div
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        animate={{
-          backgroundColor: isDragging ? "rgba(101, 218, 255, 0.1)" : "transparent",
-          borderColor: isDragging ? "rgb(101, 218, 255)" : "rgb(51, 65, 85)",
-        }}
-        className="relative border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors"
-      >
-        <input
-          type="file"
-          multiple
-          onChange={handleFileSelect}
-          disabled={isUploading}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          accept="image/*"
-        />
-
-        <motion.div animate={{ scale: isDragging ? 1.1 : 1 }} className="flex flex-col items-center gap-3">
-          <motion.div animate={{ y: isDragging ? -5 : 0 }}>
-            <Upload className="w-12 h-12 text-primary mx-auto" />
-          </motion.div>
-
-          <div>
-            <h3 className="text-xl font-semibold">Drop images here</h3>
-            <p className="text-secondary">
-              or click to browse (max {config.maxFileSize / 1024 / 1024}MB per file, up to {config.maxBulkUpload} files)
-            </p>
-          </div>
-        </motion.div>
-
-        {isUploading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-background/80 rounded-lg">
-            <div className="flex flex-col items-center gap-2">
-              <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-              <p className="text-sm text-secondary">Uploading...</p>
-            </div>
-          </div>
-        )}
-      </motion.div>
-
-      {selectedFiles.length > 0 && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold">
-              Selected Files ({selectedFiles.length}/{config.maxBulkUpload})
-            </h3>
-            <button
-              onClick={() => {
-                selectedFiles.forEach((f) => URL.revokeObjectURL(f.preview))
-                setSelectedFiles([])
-              }}
-              className="text-sm text-secondary hover:text-primary transition-colors"
-            >
-              Clear All
-            </button>
-          </div>
-          <ImagePreviewGallery files={selectedFiles} onRemove={removeFile} />
-        </div>
-      )}
-
-      <div className="bg-surface border border-border rounded-lg p-6">
-        <ExpirationSelector isProUser={isUserPro} onSelect={setSelectedExpiration} selectedDays={selectedExpiration} />
-      </div>
-
-      {selectedFiles.length > 0 && (
-        <motion.button
+    <div className="w-full space-y-8">
+      
+      {/* 1. Drop Zone (Hidden if actively uploading/showing results) */}
+      {!batchStatus && (
+        <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          onClick={uploadAllFiles}
-          disabled={isUploading}
-          className="w-full py-3 bg-gradient-to-r from-primary to-accent text-primary-foreground font-semibold rounded-lg hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          className="space-y-6"
         >
-          {isUploading ? "Uploading..." : `Upload ${selectedFiles.length} Image${selectedFiles.length > 1 ? "s" : ""}`}
-        </motion.button>
-      )}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={`
+              relative border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all duration-200
+              ${isDragging ? "border-primary bg-primary/5 scale-[1.01]" : "border-border hover:border-primary/50 hover:bg-surface"}
+            `}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={(e) => e.target.files && addFiles(e.target.files)}
+              className="hidden"
+              accept="image/*"
+            />
 
-      {error && (
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex gap-3 p-4 bg-destructive/10 border border-destructive/20 rounded-lg"
-        >
-          <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
-          <p className="text-sm text-destructive">{error}</p>
+            <div className="flex flex-col items-center gap-4">
+              <div className={`p-4 rounded-full transition-colors ${isDragging ? "bg-primary/10" : "bg-surface border border-border"}`}>
+                <Upload className={`w-8 h-8 ${isDragging ? "text-primary" : "text-secondary"}`} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-xl font-semibold">
+                  {isDragging ? "Drop files now" : "Drop images here"}
+                </h3>
+                <p className="text-secondary text-sm">
+                  or click to browse • Max {config.maxFileSize / 1024 / 1024}MB • Up to {config.maxBulkUpload} files
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Selected Files Preview Grid */}
+          <AnimatePresence>
+            {selectedFiles.length > 0 && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="space-y-4"
+              >
+                <div className="flex items-center justify-between px-1">
+                  <h4 className="font-semibold text-sm text-secondary">Selected ({selectedFiles.length})</h4>
+                  <button onClick={() => setSelectedFiles([])} className="text-xs text-red-400 hover:text-red-300">
+                    Clear All
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                  {selectedFiles.map((file) => (
+                    <motion.div
+                      key={file.id}
+                      layout
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.8 }}
+                      className="group relative aspect-square rounded-lg overflow-hidden bg-surface border border-border"
+                    >
+                      <img src={file.preview} alt="Preview" className="w-full h-full object-cover" />
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeFile(file.id); }}
+                        className="absolute top-1 right-1 p-1 bg-black/50 hover:bg-red-500 rounded-full text-white opacity-0 group-hover:opacity-100 transition-all"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </motion.div>
+                  ))}
+                </div>
+
+                {/* Expiration & Action */}
+                <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
+                  <ExpirationSelector 
+                    isProUser={isUserPro} 
+                    onSelect={setSelectedExpiration} 
+                    selectedDays={selectedExpiration} 
+                  />
+                  
+                  <button
+                    onClick={startUpload}
+                    className="w-full py-3 bg-gradient-to-r from-primary to-accent text-primary-foreground font-semibold rounded-lg hover:brightness-110 transition-all active:scale-[0.99]"
+                  >
+                    Upload {selectedFiles.length} Images
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {globalError && (
+            <div className="flex items-center gap-2 text-red-500 bg-red-500/10 p-4 rounded-lg text-sm border border-red-500/20">
+              <AlertCircle className="w-4 h-4" />
+              {globalError}
+            </div>
+          )}
         </motion.div>
       )}
 
-      {uploadedUrls.length > 0 && (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-          <h3 className="font-semibold text-lg">Recently Uploaded</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {uploadedUrls.map((url) => (
+      {/* 2. Progress & Results View */}
+      {batchStatus && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="space-y-8"
+        >
+          {/* Progress Header */}
+          <div className="bg-surface border border-border rounded-xl p-6 space-y-4">
+             <div className="flex justify-between items-end">
+               <div>
+                 <h3 className="text-lg font-semibold">
+                   {batchStatus.percent < 100 ? "Uploading..." : "Upload Complete"}
+                 </h3>
+                 <p className="text-sm text-secondary">
+                   {batchStatus.completed}/{batchStatus.total} successful • {batchStatus.failed} failed
+                 </p>
+               </div>
+               <span className="text-2xl font-bold text-primary">{Math.round(batchStatus.percent)}%</span>
+             </div>
+             
+             <div className="h-2 bg-secondary/20 rounded-full overflow-hidden">
+               <motion.div 
+                 className="h-full bg-gradient-to-r from-primary to-accent"
+                 initial={{ width: 0 }}
+                 animate={{ width: `${batchStatus.percent}%` }}
+                 transition={{ ease: "easeOut" }}
+               />
+             </div>
+          </div>
+
+          {/* Results Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* 
+               We map the SERVER items here. 
+               If the upload is still starting (percent < 100) and items array is partial,
+               you might want to merge with local previews, but for simplicity/accuracy, 
+               we rely on what the server reports back in the polling object.
+            */}
+            {batchStatus.items.map((item, idx) => (
               <motion.div
-                key={url}
-                layoutId={url}
-                className="relative aspect-square rounded-lg overflow-hidden bg-surface border border-border group"
+                key={item.id || idx}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={`
+                  flex items-center gap-4 p-3 rounded-lg border 
+                  ${item.done && !item.error ? "border-green-500/20 bg-green-500/5" : ""}
+                  ${item.error ? "border-red-500/20 bg-red-500/5" : ""}
+                  ${!item.done ? "border-border bg-surface" : ""}
+                `}
               >
-                <img src={url || "/placeholder.svg"} alt="Uploaded" className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                  <button
-                    onClick={() => navigator.clipboard.writeText(url)}
-                    className="px-3 py-1 bg-primary text-primary-foreground rounded text-sm hover:brightness-110 transition-all"
-                  >
-                    Copy
-                  </button>
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1 bg-accent text-accent-foreground rounded text-sm hover:brightness-110 transition-all"
-                  >
-                    View
-                  </a>
+                {/* Thumbnail */}
+                <div className="relative w-16 h-16 flex-shrink-0 rounded-md overflow-hidden bg-background">
+                  {item.url ? (
+                     <img src={item.url} alt="Uploaded" className="w-full h-full object-cover" />
+                  ) : (
+                     // Fallback to local preview if waiting (optional, requires index matching)
+                     // or just a loader icon
+                     <div className="w-full h-full flex items-center justify-center text-secondary">
+                       {item.error ? <AlertCircle className="w-6 h-6 text-red-500" /> : <Loader2 className="w-6 h-6 animate-spin" />}
+                     </div>
+                  )}
                 </div>
+
+                {/* Details */}
+                <div className="flex-1 min-w-0">
+                  {item.error ? (
+                    <p className="text-sm text-red-500 font-medium truncate">{item.error}</p>
+                  ) : item.url ? (
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-green-500 flex items-center gap-1">
+                        <Check className="w-3 h-3" /> Ready
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <input 
+                           readOnly 
+                           value={item.url} 
+                           className="text-xs bg-background border border-border rounded px-2 py-1 w-full text-secondary"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-secondary animate-pulse">Processing...</p>
+                  )}
+                </div>
+
+                {/* Actions */}
+                {item.url && (
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={() => copyToClipboard(item.url!)}
+                      className="p-2 hover:bg-background rounded-md text-secondary hover:text-primary transition-colors"
+                      title="Copy URL"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="p-2 hover:bg-background rounded-md text-secondary hover:text-primary transition-colors"
+                      title="Open Link"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  </div>
+                )}
               </motion.div>
             ))}
           </div>
+
+          {/* Finished State Actions */}
+          {batchStatus.percent === 100 && (
+             <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                className="flex justify-center pt-8"
+             >
+               <button
+                 onClick={() => {
+                   setBatchStatus(null)
+                   setSelectedFiles([])
+                 }}
+                 className="flex items-center gap-2 px-6 py-2 rounded-full bg-secondary/10 hover:bg-secondary/20 transition-colors font-medium"
+               >
+                 <Upload className="w-4 h-4" />
+                 Upload More Images
+               </button>
+             </motion.div>
+          )}
         </motion.div>
       )}
     </div>
