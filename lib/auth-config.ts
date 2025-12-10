@@ -110,7 +110,7 @@ const providers =
                   : profile.name || profile.email,
               email: profile.email,
               image: profile.avatar || profile.picture,
-              isUserPro: profile.isUserPro || profile.plan === "pro",
+              isUserPro: profile.isProUser,
               emailVerified: profile.emailVerified,
             }
           },
