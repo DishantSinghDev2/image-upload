@@ -41,14 +41,14 @@ export function UploadDropzone() {
   // State
   const [isDragging, setIsDragging] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<LocalFile[]>([])
-  
+
   // Stores expiration in DAYS. Null means "Never"
   const [selectedExpiration, setSelectedExpiration] = useState<number | null>(null)
-  
+
   const [isUploading, setIsUploading] = useState(false)
   const [batchStatus, setBatchStatus] = useState<BatchStatus | null>(null)
   const [globalError, setGlobalError] = useState<string>("")
-  
+
   const pollingRef = useRef<NodeJS.Timeout | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -74,8 +74,8 @@ export function UploadDropzone() {
     (files: FileList) => {
       setGlobalError("")
       if (batchStatus) {
-         setBatchStatus(null) 
-         setSelectedFiles([])
+        setBatchStatus(null)
+        setSelectedFiles([])
       }
       const fileArray = Array.from(files)
       if (fileArray.length + selectedFiles.length > config.maxBulkUpload) {
@@ -116,7 +116,7 @@ export function UploadDropzone() {
       return prev.filter((f) => f.id !== id)
     })
   }
-  
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
   }
@@ -129,29 +129,39 @@ export function UploadDropzone() {
     setIsUploading(true)
     setGlobalError("")
 
+    // 1. Prepare Form Data
     const formData = new FormData()
-    
-    // Append Files
     selectedFiles.forEach((f) => {
-      formData.append("files", f.file)
+      formData.append("files[]", f.file)
     })
-
-    // Append Expiration (Only if Pro and value is set)
     if (isUserPro && selectedExpiration) {
       formData.append("expiration", selectedExpiration.toString())
     }
 
     try {
-      const res = await fetch("/api/upload/bulk", {
+      // 2. GET SECURE TOKEN from Next.js (Tiny request, fast)
+      const tokenRes = await fetch("/api/upload/token")
+      if (!tokenRes.ok) throw new Error("Failed to get upload permission")
+      const { timestamp, signature, endpoint } = await tokenRes.json()
+
+      // 3. UPLOAD DIRECTLY TO CLOUDFLARE (Bypassing Next.js/Vercel limits)
+      const res = await fetch(endpoint, {
         method: "POST",
         body: formData,
+        headers: {
+          "x-auth-ts": String(timestamp),
+          "x-auth-sig": signature,
+          // Do NOT set Content-Type manually for FormData, browser does it with boundary
+        },
       })
+
       const data = await res.json()
 
       if (!data.success || !data.batchId) {
         throw new Error(data.error || "Failed to initiate upload")
       }
 
+      // 4. Initialize Polling (Same as before)
       setBatchStatus({
         success: true,
         batchId: data.batchId,
@@ -159,27 +169,28 @@ export function UploadDropzone() {
         completed: 0,
         failed: 0,
         percent: 0,
-        items: [] 
+        items: []
       })
+
 
       const batchId = data.batchId
       pollingRef.current = setInterval(async () => {
         try {
           const pollRes = await fetch(`/api/upload/bulk/${batchId}`)
           const pollData: BatchStatus = await pollRes.json()
-          
+
           setBatchStatus(pollData)
 
           if (pollData.percent >= 100) {
             if (pollingRef.current) clearInterval(pollingRef.current)
             setIsUploading(false)
-            
+
             // Add to History
             pollData.items.forEach(item => {
               if (item.done && item.url && !item.error) {
-                const original = selectedFiles.find((_, idx) => idx.toString() === item.id) 
+                const original = selectedFiles.find((_, idx) => idx.toString() === item.id)
                 const size = original ? original.size : 0
-                
+
                 addToHistory({
                   id: item.id,
                   title: `Upload ${new Date().toLocaleTimeString()}`,
@@ -187,10 +198,10 @@ export function UploadDropzone() {
                   size: size,
                   timestamp: Date.now(),
                   // Save calculated expiration timestamp for history reference
-                  expiration: selectedExpiration 
-                    ? Date.now() + (selectedExpiration * 24 * 60 * 60 * 1000) 
+                  expiration: selectedExpiration
+                    ? Date.now() + (selectedExpiration * 24 * 60 * 60 * 1000)
                     : undefined,
-                  deleteUrl: "" 
+                  deleteUrl: ""
                 })
               }
             })
@@ -211,7 +222,7 @@ export function UploadDropzone() {
 
   return (
     <div className="w-full space-y-8">
-      
+
       {!batchStatus && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
@@ -291,18 +302,18 @@ export function UploadDropzone() {
                 {/* Settings Panel */}
                 <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
                   {/* The New Expiration Selector */}
-                  <ExpirationSelector 
-                    isProUser={isUserPro} 
-                    selectedDays={selectedExpiration} 
-                    onSelect={setSelectedExpiration} 
+                  <ExpirationSelector
+                    isProUser={isUserPro}
+                    selectedDays={selectedExpiration}
+                    onSelect={setSelectedExpiration}
                   />
-                  
+
                   <button
                     onClick={startUpload}
                     disabled={isUploading}
                     className="w-full py-3 bg-gradient-to-r from-primary to-accent text-primary-foreground font-semibold rounded-lg hover:brightness-110 transition-all active:scale-[0.99]"
                   >
-                    {isUploading ? 'Uploading...' :`Upload ${selectedFiles.length} Images`}
+                    {isUploading ? 'Uploading...' : `Upload ${selectedFiles.length} Images`}
                   </button>
                 </div>
               </motion.div>
@@ -322,25 +333,25 @@ export function UploadDropzone() {
       {batchStatus && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
           <div className="bg-surface border border-border rounded-xl p-6 space-y-4">
-             <div className="flex justify-between items-end">
-               <div>
-                 <h3 className="text-lg font-semibold">
-                   {batchStatus.percent < 100 ? "Uploading..." : "Upload Complete"}
-                 </h3>
-                 <p className="text-sm text-secondary">
-                   {batchStatus.completed}/{batchStatus.total} successful • {batchStatus.failed} failed
-                 </p>
-               </div>
-               <span className="text-2xl font-bold text-primary">{Math.round(batchStatus.percent)}%</span>
-             </div>
-             <div className="h-2 bg-secondary/20 rounded-full overflow-hidden">
-               <motion.div 
-                 className="h-full bg-gradient-to-r from-primary to-accent"
-                 initial={{ width: 0 }}
-                 animate={{ width: `${batchStatus.percent}%` }}
-                 transition={{ ease: "easeOut" }}
-               />
-             </div>
+            <div className="flex justify-between items-end">
+              <div>
+                <h3 className="text-lg font-semibold">
+                  {batchStatus.percent < 100 ? "Uploading..." : "Upload Complete"}
+                </h3>
+                <p className="text-sm text-secondary">
+                  {batchStatus.completed}/{batchStatus.total} successful • {batchStatus.failed} failed
+                </p>
+              </div>
+              <span className="text-2xl font-bold text-primary">{Math.round(batchStatus.percent)}%</span>
+            </div>
+            <div className="h-2 bg-secondary/20 rounded-full overflow-hidden">
+              <motion.div
+                className="h-full bg-gradient-to-r from-primary to-accent"
+                initial={{ width: 0 }}
+                animate={{ width: `${batchStatus.percent}%` }}
+                transition={{ ease: "easeOut" }}
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -358,11 +369,11 @@ export function UploadDropzone() {
               >
                 <div className="relative w-16 h-16 flex-shrink-0 rounded-md overflow-hidden bg-background">
                   {item.url ? (
-                     <img src={item.url} alt="Uploaded" className="w-full h-full object-cover" />
+                    <img src={item.url} alt="Uploaded" className="w-full h-full object-cover" />
                   ) : (
-                     <div className="w-full h-full flex items-center justify-center text-secondary">
-                       {item.error ? <AlertCircle className="w-6 h-6 text-red-500" /> : <Loader2 className="w-6 h-6 animate-spin" />}
-                     </div>
+                    <div className="w-full h-full flex items-center justify-center text-secondary">
+                      {item.error ? <AlertCircle className="w-6 h-6 text-red-500" /> : <Loader2 className="w-6 h-6 animate-spin" />}
+                    </div>
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -374,10 +385,10 @@ export function UploadDropzone() {
                         <Check className="w-3 h-3" /> Ready
                       </p>
                       <div className="flex items-center gap-2">
-                        <input 
-                           readOnly 
-                           value={item.url} 
-                           className="text-xs bg-background border border-border rounded px-2 py-1 w-full text-secondary"
+                        <input
+                          readOnly
+                          value={item.url}
+                          className="text-xs bg-background border border-border rounded px-2 py-1 w-full text-secondary"
                         />
                       </div>
                     </div>
@@ -408,18 +419,18 @@ export function UploadDropzone() {
           </div>
 
           {batchStatus.percent === 100 && (
-             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-center pt-8">
-               <button
-                 onClick={() => {
-                   setBatchStatus(null)
-                   setSelectedFiles([])
-                 }}
-                 className="flex items-center gap-2 px-6 py-2 rounded-full bg-secondary/10 hover:bg-secondary/20 transition-colors font-medium"
-               >
-                 <Upload className="w-4 h-4" />
-                 Upload More Images
-               </button>
-             </motion.div>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-center pt-8">
+              <button
+                onClick={() => {
+                  setBatchStatus(null)
+                  setSelectedFiles([])
+                }}
+                className="flex items-center gap-2 px-6 py-2 rounded-full bg-secondary/10 hover:bg-secondary/20 transition-colors font-medium"
+              >
+                <Upload className="w-4 h-4" />
+                Upload More Images
+              </button>
+            </motion.div>
           )}
         </motion.div>
       )}
